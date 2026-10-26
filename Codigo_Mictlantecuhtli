@@ -1,1 +1,156 @@
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
 
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+#define SERVOMIN  150 
+#define SERVOMAX  600 
+
+// ---- ASIGNACIÓN DE PINES ----
+const int PIN_PARP_IZQ = 0;
+const int PIN_PARP_DER = 1;
+const int PIN_VERT_IZQ = 2;
+const int PIN_VERT_DER = 3;
+const int PIN_HORZ_IZQ = 4;
+const int PIN_HORZ_DER = 5;
+
+// ---- CONFIGURACIÓN DE PÁRPADOS ----
+const int PARP_IZQ_ABIERTO = 50;
+const int PARP_IZQ_CERRADO = 110;
+const int PARP_DER_ABIERTO = 120; 
+const int PARP_DER_CERRADO = 60;  
+
+// Variables de posición
+int posActual[6]  = {PARP_IZQ_ABIERTO, PARP_DER_ABIERTO, 90, 90, 90, 90};
+int posDestino[6] = {PARP_IZQ_ABIERTO, PARP_DER_ABIERTO, 90, 90, 90, 90};
+
+// Variables para control de velocidad
+unsigned long ultimoMovimiento[6] = {0, 0, 0, 0, 0, 0};
+int velocidadServo[6] = {3, 3, 15, 15, 15, 15}; 
+
+// Variables para el parpadeo independiente
+unsigned long tiempoUltimoParpadeo = 0;
+unsigned long tiempoInicioCierre = 0;
+int intervaloParpadeo = 3000; 
+bool estaParpadeando = false;
+
+void setup() {
+  Serial.begin(9600);
+  Serial.println("Sistema Listo. Controles: W (Arriba), S (Abajo), A (Izquierda), D (Derecha), C (Centro)");
+  
+  pwm.begin();
+  pwm.setOscillatorFrequency(27000000);
+  pwm.setPWMFreq(60);
+  
+  for(int i = 0; i < 6; i++) {
+    enviarAngulo(i, posActual[i]);
+  }
+  delay(1000); 
+}
+
+void loop() {
+  actualizarParpadeo();
+  controlManualOjos(); // <--- Nueva función de control
+  moverServosHaciaDestino();
+}
+
+// ---------------------------------------------------------
+// TAREA 1: PARPADEO INDEPENDIENTE (Intacto)
+// ---------------------------------------------------------
+void actualizarParpadeo() {
+  unsigned long actual = millis();
+
+  if (!estaParpadeando && (actual - tiempoUltimoParpadeo > intervaloParpadeo)) {
+    estaParpadeando = true;
+    tiempoInicioCierre = actual;
+    
+    posDestino[PIN_PARP_IZQ] = PARP_IZQ_CERRADO;  
+    posDestino[PIN_PARP_DER] = PARP_DER_CERRADO; 
+  }
+
+  if (estaParpadeando && (actual - tiempoInicioCierre > 250)) {
+    posDestino[PIN_PARP_IZQ] = PARP_IZQ_ABIERTO;
+    posDestino[PIN_PARP_DER] = PARP_DER_ABIERTO;
+    
+    estaParpadeando = false;
+    tiempoUltimoParpadeo = actual;
+    intervaloParpadeo = random(2000, 5000); 
+  }
+}
+
+// ---------------------------------------------------------
+// TAREA 2: CONTROL MANUAL POR MONITOR SERIE
+// ---------------------------------------------------------
+void controlManualOjos() {
+  // Si llega algún dato desde la computadora
+  if (Serial.available() > 0) {
+    char comando = Serial.read();
+    
+    // Convertimos a minúscula por si acaso
+    comando = tolower(comando);
+
+    // Mantenemos los valores actuales de los ejes para no sobreescribirlos si no cambian
+    int v_izq = posDestino[PIN_VERT_IZQ];
+    int v_der = posDestino[PIN_VERT_DER];
+    int h_izq = posDestino[PIN_HORZ_IZQ];
+    int h_der = posDestino[PIN_HORZ_DER];
+
+    switch(comando) {
+      case 'c': // CENTRO (Centra tanto vertical como horizontal)
+        v_izq = 90; v_der = 90;
+        h_izq = 90; h_der = 90;
+        Serial.println("Comando: CENTRO");
+        break;
+      case 'w': // ARRIBA 
+        v_izq = 120; v_der = 60;
+        Serial.println("Comando: ARRIBA");
+        break;
+      case 's': // ABAJO
+        v_izq = 60; v_der = 120;
+        Serial.println("Comando: ABAJO");
+        break;
+      case 'a': // IZQUIERDA
+        h_izq = 110; h_der = 120;
+        Serial.println("Comando: IZQUIERDA");
+        break;
+      case 'd': // DERECHA
+        h_izq = 50; h_der = 60;
+        Serial.println("Comando: DERECHA");
+        break;
+    }
+
+    // Aplicamos la nueva posición deseada
+    posDestino[PIN_VERT_IZQ] = v_izq;
+    posDestino[PIN_VERT_DER] = v_der;
+    posDestino[PIN_HORZ_IZQ] = h_izq;
+    posDestino[PIN_HORZ_DER] = h_der;
+  }
+}
+
+// ---------------------------------------------------------
+// TAREA 3: MOTOR DE MOVIMIENTO SUAVE
+// ---------------------------------------------------------
+void moverServosHaciaDestino() {
+  unsigned long actual = millis();
+  
+  for (int i = 0; i < 6; i++) {
+    if (actual - ultimoMovimiento[i] >= velocidadServo[i]) {
+      
+      if (posActual[i] < posDestino[i]) {
+        posActual[i]++;
+        enviarAngulo(i, posActual[i]);
+      } 
+      else if (posActual[i] > posDestino[i]) {
+        posActual[i]--;
+        enviarAngulo(i, posActual[i]);
+      }
+      
+      ultimoMovimiento[i] = actual;
+    }
+  }
+}
+
+void enviarAngulo(uint8_t pin, int angulo) {
+  int pulso = map(angulo, 0, 180, SERVOMIN, SERVOMAX);
+  pwm.setPWM(pin, 0, pulso);
+}
